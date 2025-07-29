@@ -17,18 +17,15 @@ enum SortOption: String, CaseIterable, Identifiable {
     var id: Self { self }
 }
 
-// Helper to decode JSON
-private func decodeMitarbeiter() -> [Worker] {
-    guard let url = Bundle.main.url(forResource: "Mitarbeiter", withExtension: "json") else {
-        return []
+// Model matching the backend payload
+private struct APIWorker: Decodable {
+    struct Location: Decodable {
+        let locationId: Int
+        let locationName: String
     }
-    do {
-        let data = try Data(contentsOf: url)
-        return try JSONDecoder().decode([Worker].self, from: data)
-    } catch {
-        print("Fehler beim Laden der Mitarbeiter: \(error)")
-        return []
-    }
+    let userId: Int
+    let name: String
+    let currentLocation: Location?
 }
 
 // MARK: - ViewModel
@@ -64,9 +61,38 @@ final class WorkersListViewModel: ObservableObject {
     init() {
         loadWorkers()
     }
-    
+
     private func loadWorkers() {
-        allWorkers = decodeMitarbeiter()
+        AuthManager.shared.withFreshTokens { token, error in
+            guard let token = token,
+                  let url = URL(string: "http://172.16.42.23:3000/web/all-user-current-location")
+            else {
+                print("Fehler: Kein Token oder ungültige URL")
+                return
+            }
+
+            var request = URLRequest(url: url)
+            request.httpMethod = "GET"
+            request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+
+            URLSession.shared.dataTask(with: request) { data, _, err in
+                guard err == nil, let data = data else {
+                    print("Fehler beim Laden der Mitarbeiter: \(err?.localizedDescription ?? "Unbekannter Fehler")")
+                    return
+                }
+                do {
+                    let apiWorkers = try JSONDecoder().decode([APIWorker].self, from: data)
+                    let mapped = apiWorkers.map { Worker(userID: $0.userId,
+                                                       userName: $0.name,
+                                                       locationName: $0.currentLocation?.locationName) }
+                    DispatchQueue.main.async { [mapped] in
+                        self.allWorkers = mapped
+                    }
+                } catch {
+                    print("Fehler beim Decodieren: \(error)")
+                }
+            }.resume()
+        }
     }
 }
 
